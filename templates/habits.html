@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Habits — Day Ring{% endblock %}
+{% block content %}
+
+<section class="page-intro">
+    <div class="hero-copy">
+        <span class="eyebrow">YOUR HABITS</span>
+        <h1>Shape your habits<span>.</span></h1>
+        <p>Add, reweight, or retire habits — weights should sum to 100 across active ones.</p>
+    </div>
+    <div class="metric-chip {{ 'warning' if active_total != 100 }}">
+        <strong>{{ active_total }}</strong><span>/ 100 active weight</span>
+    </div>
+</section>
+
+<div class="habit-builder">
+    <div class="builder-panel">
+        <span class="builder-plus">+</span>
+        <h2>Add a new habit</h2>
+        <form method="post" action="{{ url_for('add_habit') }}" class="add-habit-form">
+            <label>Category<input type="text" name="category" list="category-options" required></label>
+            <datalist id="category-options">{% for c in categories %}<option value="{{ c }}">{% endfor %}</datalist>
+            <label>Habit name<input type="text" name="name" required></label>
+            <label>Weight<input type="number" name="weight" min="1" max="100" value="5" required></label>
+            <button type="submit" class="primary-button">Add</button>
+        </form>
+    </div>
+    <div class="weight-panel">
+        <span class="panel-label">ACTIVE WEIGHT</span>
+        <div class="weight-big">{{ active_total }}<small>/100</small></div>
+        <div class="weight-meter"><i style="width: {{ [active_total, 100] | min }}%"></i></div>
+        <p class="{{ 'weight-good' if active_total == 100 else 'weight-warning' }}">
+            {{ 'Balanced — each active habit contributes exactly its share.' if active_total == 100 else 'Adjust weights so active habits sum to 100 for a clean percentage.' }}
+        </p>
+    </div>
+</div>
+
+<div class="manage-section">
+    <div class="content-heading">
+        <h2>Manage habits</h2>
+        <span class="helper">{{ habits | length }} total</span>
+    </div>
+    {% if habits %}
+    <div class="manage-list">
+        {% for h in habits %}
+        <div class="manage-card {{ 'archived' if not h.active }}">
+            <form method="post" action="{{ url_for('update_habit', habit_id=h.id) }}" class="manage-form">
+                <span class="manage-status {{ '' if h.active else 'off' }}"></span>
+                <label class="habit-name-field">Category<input type="text" name="category" value="{{ h.category }}" required></label>
+                <label class="habit-name-field">Name<input type="text" name="name" value="{{ h.name }}" required></label>
+                <label>Weight<input type="number" name="weight" value="{{ h.weight }}" min="1" max="100" required></label>
+                <button type="submit" class="secondary-button">Save</button>
+            </form>
+            <div class="manage-actions">
+                <form method="post" action="{{ url_for('toggle_habit_active', habit_id=h.id) }}">
+                    <button type="submit" class="link-button">{{ 'Restore' if not h.active else 'Archive' }}</button>
+                </form>
+                <form method="post" action="{{ url_for('delete_habit', habit_id=h.id) }}" onsubmit="return confirm('Delete this habit and all its logged history? This cannot be undone.');">
+                    <button type="submit" class="link-button danger">Delete</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-manage">
+        <div>&#10022;</div>
+        <h2>No habits yet</h2>
+        <p>Add your first one above to get started.</p>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

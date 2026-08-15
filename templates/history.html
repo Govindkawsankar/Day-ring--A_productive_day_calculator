@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}History — Day Ring{% endblock %}
+{% block content %}
+
+<section class="page-intro">
+    <div class="hero-copy">
+        <span class="eyebrow">YOUR HISTORY</span>
+        <h1>Consistency, visualized<span>.</span></h1>
+        <p>Every filled square is a day you showed up.</p>
+    </div>
+    <div class="metric-chip {{ 'warning' if logged_days < baseline_target }}">
+        <strong>{{ logged_days }}</strong><span>days logged</span>
+    </div>
+</section>
+
+<div class="history-panel">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">LAST 10 WEEKS</span>
+            <h2>Your logging grid</h2>
+        </div>
+        <span class="status-chip {{ 'success' if logged_days >= baseline_target }}">{{ 'Baseline reached' if logged_days >= baseline_target else 'Building baseline' }}</span>
+    </div>
+    <div class="heatmap-scroll">
+        <div class="heatmap">
+            {% for cell in cells %}
+                {% if cell is none %}
+                <span class="heat-cell" style="visibility:hidden"></span>
+                {% else %}
+                <a class="heat-cell {{ 'today' if cell.is_today }} {{ 'no-data' if cell.pct is none else 'level-' ~ ((cell.pct // 25) | int) }}"
+                   href="{{ url_for('day_view', log_date=cell.date) }}"
+                   title="{{ cell.date }}{{ ' — ' ~ cell.pct ~ '%' if cell.pct is not none }}"></a>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    <div class="heat-legend">
+        <span>Less</span>
+        <span class="heat-cell no-data"></span>
+        <span class="heat-cell level-0"></span>
+        <span class="heat-cell level-1"></span>
+        <span class="heat-cell level-2"></span>
+        <span class="heat-cell level-3"></span>
+        <span>More</span>
+    </div>
+</div>
+
+{% if logged_days < baseline_target %}
+<div class="history-note">
+    <span>&#9432;</span>
+    <div>
+        <strong>{{ baseline_target - logged_days }} more day{{ 's' if baseline_target - logged_days != 1 }} to your 15-day baseline</strong>
+        <p>That's roughly when the correlation and predictive features have enough history to say something reliable.</p>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

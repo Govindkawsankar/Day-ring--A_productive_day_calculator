@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+(function(){
+    try {
+        var stored = localStorage.getItem("theme");
+        if (stored === "dark" || stored === "light") {
+            document.documentElement.setAttribute("data-theme", stored);
+        }
+    } catch (e) {}
+})();
+</script>
+<title>{% block title %}Day Ring{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="theme-color" content="#17201d">
+<link rel="icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <a class="brand" href="{{ url_for('index') }}">
+            <span class="brand-orbit"><i></i></span>
+            Day Ring
+        </a>
+        <nav class="main-nav">
+            <a href="{{ url_for('index') }}" class="{{ 'active' if active_page == 'today' }}">Today</a>
+            <a href="{{ url_for('history') }}" class="{{ 'active' if active_page == 'history' }}">History</a>
+            <a href="{{ url_for('insights') }}" class="{{ 'active' if active_page == 'insights' }}">Insights</a>
+            <a href="{{ url_for('habits') }}" class="{{ 'active' if active_page == 'habits' }}">Habits</a>
+        </nav>
+        <a class="header-action" href="{{ url_for('day_view', log_date=today_iso) }}">Today <span>&#8599;</span></a>
+        <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode" title="Toggle dark mode">🌙</button>
+        {% if session.username %}
+        <a class="header-action" href="{{ url_for('account') }}" style="margin-right:8px;">{{ session.username }}</a>
+        <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+            <button type="submit" class="logout-action">Log out</button>
+        </form>
+        {% endif %}
+    </header>
+    <main class="page">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">
+        <span>Built one honest day at a time.</span>
+        <span class="footer-brand">Day Ring</span>
+    </footer>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script>
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+        navigator.serviceWorker.register("/service-worker.js").catch(function () {});
+    });
+}
+</script>
+</body>
+</html>

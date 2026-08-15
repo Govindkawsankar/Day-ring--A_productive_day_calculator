@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Today — Day Ring{% endblock %}
+{% block content %}
+
+<section class="today-hero">
+    <div class="hero-copy">
+        <div class="eyebrow-row">
+            <span class="eyebrow">YOUR DAY</span>
+            {% if streak > 1 %}<span class="micro-streak">🔥 {{ streak }}-day streak</span>{% endif %}
+        </div>
+        <h1>Make today count<span>.</span></h1>
+        <p>One small action at a time. Here's your progress so far.</p>
+    </div>
+    <div class="date-control">
+        <a href="{{ url_for('day_view', log_date=prev_date) }}" class="date-arrow">&larr;</a>
+        <div>
+            <span class="date-label">{{ today }}</span>
+            <small>{{ 'Today' if is_today else 'Editing past day' }}</small>
+        </div>
+        <a href="{{ url_for('day_view', log_date=next_date) }}" class="date-arrow">&rarr;</a>
+    </div>
+</section>
+
+{% if anomaly %}
+<div class="history-note" style="margin-bottom:20px; border-color: {{ '#f1d7cd' if anomaly.type == 'low' else 'var(--line)' }};">
+    <span style="color: {{ 'var(--orange-dark)' if anomaly.type == 'low' else 'var(--green)' }};">{{ '◐' if anomaly.type == 'low' else '◆' }}</span>
+    <div>
+        <strong>{{ 'A quieter day than usual' if anomaly.type == 'low' else 'Above your usual pattern' }}</strong>
+        <p>{{ anomaly.message }}</p>
+    </div>
+</div>
+{% endif %}
+
+<section class="hero-dashboard">
+    <div class="score-panel">
+        <span class="panel-label">TODAY'S SCORE</span>
+        <div class="score-main">
+            <div class="score-orbit">
+                <svg viewBox="0 0 210 210">
+                    <circle class="orbit-track" cx="105" cy="105" r="90"></circle>
+                    <circle id="orbit-progress" class="orbit-progress" cx="105" cy="105" r="90"
+                        stroke-dasharray="565.49"
+                        stroke-dashoffset="{{ (565.49 * (1 - overall_pct / 100)) | round(2) }}"></circle>
+                </svg>
+                <div class="score-center">
+                    <strong id="score-pct-text">{{ overall_pct }}%</strong>
+                    <span>PRODUCTIVE</span>
+                </div>
+            </div>
+            <div class="score-story">
+                <span class="story-label">A QUICK READ</span>
+                <p>{{ message or "Log a habit to get today's read." }}</p>
+                <div class="score-meter">
+                    <div><i id="score-meter-fill" style="width: {{ overall_pct }}%"></i></div>
+                    <span id="score-meter-text">{{ earned_weight }} / {{ total_weight }}</span>
+                </div>
+                {% if predicted_tone_label %}
+                <p class="panel-hint" style="margin-top:10px">
+                    Predicted reflection tone today:
+                    <span class="status-chip {{ 'success' if predicted_tone_label == 'positive' else ('negative' if predicted_tone_label == 'negative' else '') }}">{{ predicted_tone_label }}</span>
+                </p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="category-panel">
+        <div class="panel-head">
+            <div>
+                <span class="panel-label">YOUR BALANCE</span>
+                <h2>Across your day</h2>
+            </div>
+            <span class="panel-hint">category progress</span>
+        </div>
+        <div class="category-stack">
+            {% for ring in category_rings %}
+            <div>
+                <div class="category-line-top">
+                    <span><i style="background:{{ ring.color }}"></i>{{ ring.name }}</span>
+                    <strong class="cat-pct-text" data-category="{{ ring.name }}">{{ ring.pct }}%</strong>
+                </div>
+                <div class="category-progress"><i class="cat-bar-fill" data-category="{{ ring.name }}" style="width:{{ ring.pct }}%; background:{{ ring.color }}"></i></div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<div class="baseline-strip">
+    <span class="baseline-symbol">&#10022;</span>
+    <div class="baseline-main">
+        <div class="baseline-top">
+            <strong>Building your personal baseline</strong>
+            <span>{{ logged_days }} / {{ baseline_target }} days</span>
+        </div>
+        <div class="baseline-progress"><i style="width: {{ baseline_pct }}%"></i></div>
+        <p>
+            {% if logged_days >= baseline_target %}
+            Baseline reached — the ML features have enough history to start being useful.
+            {% else %}
+            {{ baseline_target - logged_days }} more day{{ 's' if baseline_target - logged_days != 1 }} gives your patterns more context.
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="content-heading">
+    <h2>Today's habits</h2>
+    <span class="helper">tap to check off</span>
+</div>
+
+<div class="habit-grid">
+    {% for cat, data in by_category.items() %}
+    <div class="habit-group">
+        <div class="habit-group-head">
+            <div class="habit-category">
+                <span class="category-accent" style="background: {{ category_rings | selectattr('name','equalto',cat) | map(attribute='color') | first }}"></span>
+                <h3>{{ cat }}</h3>
+            </div>
+            <span class="category-score group-pct-text" data-category="{{ cat }}">{{ category_rings | selectattr('name','equalto',cat) | map(attribute='pct') | first }}%</span>
+        </div>
+        <div class="habit-list">
+            {% for h in data.habits %}
+            <form method="post" action="{{ url_for('toggle') }}" class="habit-toggle-form">
+                <input type="hidden" name="log_date" value="{{ today }}">
+                <input type="hidden" name="habit_id" value="{{ h.id }}">
+                <input type="hidden" name="completed" value="{{ '0' if h.done else '1' }}">
+                <button type="submit" class="habit-item {{ 'completed' if h.done }}"
+                    data-habit-id="{{ h.id }}" data-weight="{{ h.weight }}" data-category="{{ cat }}" data-done="{{ '1' if h.done else '0' }}">
+                    <span class="check-ring">{{ '✓' if h.done else '' }}</span>
+                    <span class="habit-text"><strong>{{ h.name }}</strong></span>
+                    <span class="habit-weight">{{ h.weight }}</span>
+                </button>
+            </form>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="lower-grid">
+    <div class="reflection-panel">
+        <span class="panel-symbol">&#9998;</span>
+        <span class="panel-label">WHAT SHAPED TODAY</span>
+        <p class="panel-copy">One or two lines — this feeds the sentiment and theme insights.</p>
+        <form method="post" action="{{ url_for('reflect') }}">
+            <input type="hidden" name="log_date" value="{{ today }}">
+            <textarea name="text" placeholder="Felt focused after a good night's sleep...">{{ reflection_text }}</textarea>
+            <div class="form-footer">
+                <span>
+                    {% if reflection_sentiment_label %}
+                    <span class="status-chip {{ 'success' if reflection_sentiment_label == 'positive' else ('negative' if reflection_sentiment_label == 'negative' else '') }}">{{ reflection_sentiment_label }}</span>
+                    {% endif %}
+                    {% for tag in reflection_tags %}· {{ tag }}{% endfor %}
+                </span>
+                <button type="submit" class="primary-button">Save</button>
+            </div>
+        </form>
+    </div>
+    <div class="quote-panel">
+        <span class="panel-label">WHY THIS MATTERS</span>
+        <div class="quote-mark">&#8220;</div>
+        <h2>Every reflection you save now becomes a pattern the model can learn from later.</h2>
+        <a href="{{ url_for('insights') }}">See what's emerging <span>&#8594;</span></a>
+    </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Account — Day Ring{% endblock %}
+{% block content %}
+
+<section class="page-intro">
+    <div class="hero-copy">
+        <span class="eyebrow">ACCOUNT</span>
+        <h1>Change your password<span>.</span></h1>
+        <p>Logged in as {{ session.username }}.</p>
+    </div>
+</section>
+
+<div class="builder-panel" style="max-width:420px;">
+    {% if success %}
+    <p style="color:var(--green); font-size:12px; margin:0 0 14px;">{{ success }}</p>
+    {% endif %}
+    {% if error %}
+    <p style="color:var(--rose); font-size:12px; margin:0 0 14px;">{{ error }}</p>
+    {% endif %}
+    <form method="post" style="display:grid; gap:14px;">
+        <label style="display:grid; gap:5px; font:500 9px var(--mono); color:var(--muted); letter-spacing:.03em;">
+            Current password
+            <input type="password" name="current_password" required>
+        </label>
+        <label style="display:grid; gap:5px; font:500 9px var(--mono); color:var(--muted); letter-spacing:.03em;">
+            New password (6+ characters)
+            <input type="password" name="new_password" required minlength="6">
+        </label>
+        <button type="submit" class="primary-button" style="width:100%; text-align:center; padding:12px;">Update password</button>
+    </form>
+</div>
+
+{% endblock %}

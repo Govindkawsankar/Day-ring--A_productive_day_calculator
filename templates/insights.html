@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}Insights — Day Ring{% endblock %}
+{% block content %}
+
+<section class="page-intro">
+    <div class="hero-copy">
+        <span class="eyebrow">PATTERNS</span>
+        <h1>What's shaping your score<span>.</span></h1>
+        <p>Correlations between what you do, what you write, and how the day turns out.</p>
+    </div>
+</section>
+
+{% if weekly_summary.has_data %}
+<div class="quote-panel" style="margin-bottom:15px;">
+    <span class="panel-label">THIS WEEK</span>
+    <div class="quote-mark">&#8220;</div>
+    <h2>
+        {{ weekly_summary.this_avg }}% average over {{ weekly_summary.this_days }} logged day{{ 's' if weekly_summary.this_days != 1 }}{% if weekly_summary.trend == 'up' %}, up from {{ weekly_summary.last_avg }}% last week{% elif weekly_summary.trend == 'down' %}, down from {{ weekly_summary.last_avg }}% last week{% elif weekly_summary.trend == 'flat' %}, holding steady from {{ weekly_summary.last_avg }}% last week{% endif %}.
+        {% if weekly_summary.strongest %}{{ weekly_summary.strongest }} was your strongest category at {{ weekly_summary.strongest_pct }}%{% if weekly_summary.weakest and weekly_summary.weakest != weekly_summary.strongest %}; {{ weekly_summary.weakest }} lagged at {{ weekly_summary.weakest_pct }}%{% endif %}.{% endif %}
+    </h2>
+</div>
+{% endif %}
+
+<div class="insight-panel">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">TREND</span>
+            <h2>Your score over time</h2>
+        </div>
+        <span class="panel-hint">last 30 logged days</span>
+    </div>
+    {% if trend_svg %}
+    <svg viewBox="0 0 {{ trend_svg.width }} {{ trend_svg.height }}" class="trend-svg" preserveAspectRatio="none" style="margin-top:18px; width:100%; height:140px;">
+        <path d="{{ trend_svg.area_d }}" class="trend-area"></path>
+        <path d="{{ trend_svg.line_d }}" class="trend-line"></path>
+        {% for p in trend_svg.points %}
+        <circle cx="{{ p.x }}" cy="{{ p.y }}" r="3" class="trend-dot">
+            <title>{{ p.date }} — {{ p.pct }}%</title>
+        </circle>
+        {% endfor %}
+    </svg>
+    {% else %}
+    <p class="panel-hint" style="margin-top:16px">Log at least 2 days to see a trend line here.</p>
+    {% endif %}
+</div>
+
+{% if not enough_data %}
+<div class="insight-empty">
+    <div class="insight-orbit">&#10022;</div>
+    <h2>Not enough data yet</h2>
+    <p>Logged {{ logged_days }} day{{ 's' if logged_days != 1 }} so far — correlation needs at least 5 days of history before it means anything. Keep logging and this page fills in, including a suggested reweighting of your habits based on what actually moves your score.</p>
+    <a class="primary-button" href="{{ url_for('index') }}">Log today</a>
+</div>
+{% else %}
+<div class="insight-panel">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">HABIT CATEGORIES</span>
+            <h2>Correlation with your overall score</h2>
+        </div>
+        <span class="panel-hint">based on {{ logged_days }} logged days</span>
+    </div>
+    <div class="insight-rows">
+        {% for c in correlations %}
+        <div class="insight-row">
+            <div class="insight-name">
+                <strong>{{ c.category }}</strong>
+                <span>avg {{ c.avg }}%</span>
+            </div>
+            <div class="insight-bar-wrap">
+                <div class="insight-bar"><i class="{{ 'positive' if c.r and c.r > 0 else 'negative' }}" style="width: {{ c.avg }}%"></i></div>
+                {% if c.r is not none %}
+                <span class="correlation {{ 'positive-text' if c.r > 0.2 else ('negative-text' if c.r < -0.2 else '') }}">r = {{ c.r }}</span>
+                {% else %}
+                <span class="not-ready">not enough data</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="insight-panel" style="margin-top:15px">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">REFLECTIONS</span>
+            <h2>What your words say</h2>
+        </div>
+        {% if avg_sentiment is not none %}<span class="panel-hint">avg tone {{ avg_sentiment }}</span>{% endif %}
+    </div>
+    {% if reflection_count == 0 %}
+    <p class="panel-hint" style="margin-top:16px">No reflections yet — write a line on the dashboard and themes start showing up here.</p>
+    {% elif not tag_insights %}
+    <p class="panel-hint" style="margin-top:16px">No recurring themes yet — mention specific things (tired, distracted, exam) and they'll surface here.</p>
+    {% else %}
+    <div class="insight-rows">
+        {% for t in tag_insights %}
+        <div class="insight-row">
+            <div class="insight-name">
+                <strong>{{ t.tag }}</strong>
+                <span>{{ t.count }}x mentioned</span>
+            </div>
+            <div class="insight-bar-wrap">
+                {% if t.avg_without is not none %}
+                <div class="insight-bar"><i class="{{ 'negative' if t.diff < 0 else 'positive' }}" style="width: {{ t.avg_with }}%"></i></div>
+                <span class="correlation {{ 'negative-text' if t.diff < 0 else 'positive-text' }}">{{ t.avg_with }}% vs {{ t.avg_without }}%</span>
+                {% else %}
+                <div class="insight-bar"></div>
+                <span class="not-ready">need more variety</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+{% if weight_suggestions and weight_suggestions.has_changes %}
+<div class="insight-panel" style="margin-top:15px">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">SUGGESTED WEIGHTS</span>
+            <h2>Let your data reweight your habits</h2>
+        </div>
+        <span class="panel-hint">based on category correlation</span>
+    </div>
+    <p class="panel-hint" style="margin:12px 0 4px">
+        Categories that move with your best days get more weight here; ones that
+        don't get less. A category's score is part of the overall score by
+        construction, so treat this as a directional nudge, not proof — but it's
+        a reasonable starting point.
+    </p>
+    <div class="insight-rows">
+        {% for s in weight_suggestions.suggestions %}
+        <div class="insight-row">
+            <div class="insight-name">
+                <strong>{{ s.name }}</strong>
+                <span>{{ s.category }}</span>
+            </div>
+            <div class="insight-bar-wrap">
+                <span class="correlation {{ 'positive-text' if s.new_weight > s.old_weight else 'negative-text' }}">
+                    {{ s.old_weight }} &rarr; {{ s.new_weight }}
+                </span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <form method="post" action="{{ url_for('apply_weights') }}" style="margin-top:18px">
+        <button type="submit" class="primary-button">Apply suggested weights</button>
+    </form>
+</div>
+{% elif enough_data %}
+<div class="insight-panel" style="margin-top:15px">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">SUGGESTED WEIGHTS</span>
+            <h2>Your weights already match your data</h2>
+        </div>
+    </div>
+    <p class="panel-hint" style="margin-top:16px">No changes suggested right now — your current weights are already close to what the correlations recommend.</p>
+</div>
+{% endif %}
+
+<div class="insight-panel" style="margin-top:15px">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">PREDICTIVE MODEL</span>
+            <h2>What actually predicts a good-tone day</h2>
+        </div>
+        {% if predictive_model.ready %}<span class="panel-hint">trained on {{ predictive_model.rows }} reflections</span>{% endif %}
+    </div>
+    {% if not predictive_model.ready %}
+    <p class="panel-hint" style="margin-top:16px">
+        {{ predictive_model.rows }} of {{ predictive_model.needed }} reflections with sentiment logged —
+        once there are {{ predictive_model.needed }}, a small model learns which categories actually predict
+        a positive-toned reflection, trained on your own words rather than the score itself.
+    </p>
+    {% else %}
+    <p class="panel-hint" style="margin:12px 0 4px">
+        Learned from your reflections' sentiment, not from the score formula itself — so this is a genuinely
+        independent read on what moves your tone, not a restatement of the weights.
+    </p>
+    <div class="insight-rows">
+        {% for cat in predictive_model.categories %}
+        <div class="insight-row">
+            <div class="insight-name">
+                <strong>{{ cat }}</strong>
+            </div>
+            <div class="insight-bar-wrap">
+                <span class="correlation {{ 'positive-text' if predictive_model.weights[cat] > 0 else ('negative-text' if predictive_model.weights[cat] < 0 else '') }}">
+                    weight {{ predictive_model.weights[cat] }}
+                </span>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div class="insight-panel" style="margin-top:15px">
+    <div class="panel-head">
+        <div>
+            <span class="panel-label">YOUR DATA</span>
+            <h2>Export everything</h2>
+        </div>
+    </div>
+    <p class="panel-hint" style="margin:12px 0 16px">Habits, daily logs, and reflections — all of it, in a format you can open elsewhere or attach to a report.</p>
+    <div style="display:flex; gap:10px;">
+        <a href="{{ url_for('export_csv') }}" class="secondary-button">Download CSV</a>
+        <a href="{{ url_for('export_json') }}" class="secondary-button">Download JSON</a>
+    </div>
+</div>
+
+{% endblock %}
