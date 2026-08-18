@@ -207,7 +207,7 @@ input[type=text],input[type=number],input[type=password]{width:100%;border:1px s
 .weight-meter{height:7px;background:rgba(255,255,255,.12);border-radius:99px;overflow:hidden}.weight-meter i{display:block;height:100%;background:var(--green);border-radius:inherit}
 .weight-panel p{margin:12px 0 0;color:var(--muted-2);font-size:11px}.weight-good{color:#b7d1ba!important}.weight-warning{color:#f1b6a3!important}
 .manage-section{margin-top:41px}
-.manage-list{display:grid;gap:9px}.manage-card{border-radius:15px;padding:12px 13px;position:relative}
+.manage-list{display:grid;gap:9px}.manage-card{border-radius:15px;padding:12px 13px}
 .manage-form{display:grid;grid-template-columns:7px 1fr 1.8fr 90px auto;gap:10px;align-items:end}
 .manage-status{width:7px;height:7px;border-radius:50%;background:var(--green);align-self:center}.manage-status.off{background:var(--line-2)}
 .manage-form label span{font-size:8px;color:var(--muted-2)}.manage-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 0 0 18px}
@@ -222,7 +222,7 @@ input[type=text],input[type=number],input[type=password]{width:100%;border:1px s
 .score-main{grid-template-columns:1fr;gap:5px;padding-top:16px}.score-orbit{width:190px;height:190px}.score-story{max-width:none}.score-story p{font-size:21px;margin-bottom:17px}
 .baseline-top{align-items:flex-start;flex-direction:column;gap:5px}.habit-grid{gap:10px}.lower-grid{gap:10px}.form-footer{align-items:flex-start;flex-direction:column}.primary-button{width:100%;text-align:center}
 .insight-row{grid-template-columns:1fr;gap:10px}.add-habit-form{grid-template-columns:1fr}.add-habit-form .primary-button{width:100%}
-.manage-form{display:flex;flex-direction:column;gap:10px}.manage-form label{width:100%}.manage-form .secondary-button{width:100%;text-align:center}.manage-status{position:absolute;top:14px;right:14px}.manage-actions{justify-content:flex-start;padding-left:0}
+.manage-form{grid-template-columns:7px 1fr 85px}.manage-form .habit-name-field{grid-column:2/-1}.manage-form .secondary-button{grid-column:2/3}.manage-actions{justify-content:flex-start;padding-left:17px}
 .footer{flex-direction:column;gap:5px}
 .habit-text strong{font-size:17px}.habit-text small{font-size:13px}.habit-weight{font-size:13px}.check-ring{width:32px;height:32px;font-size:17px}
 .habit-item{padding:13px 10px}.habit-category h3{font-size:17px}.category-score{font-size:11px}
