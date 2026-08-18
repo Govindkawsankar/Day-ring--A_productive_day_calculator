@@ -97,6 +97,10 @@ app = Flask(__name__)
 # For local use this default is fine. Before hosting this online, set a real
 # SECRET_KEY environment variable so sessions can't be forged.
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-this-before-hosting")
+# Sessions last 30 days instead of expiring when the browser closes — set as
+# permanent at login/register so users don't have to keep re-entering
+# username and password.
+app.permanent_session_lifetime = timedelta(days=30)
 
 
 @app.context_processor
@@ -470,6 +474,7 @@ def register():
     db.commit()
     session["user_id"] = user_id
     session["username"] = username
+    session.permanent = True
     return redirect(url_for("index"))
 
 
@@ -511,6 +516,7 @@ def login():
     db.commit()
     session["user_id"] = row["id"]
     session["username"] = row["username"]
+    session.permanent = True
     next_path = request.args.get("next")
     return redirect(next_path or url_for("index"))
 
