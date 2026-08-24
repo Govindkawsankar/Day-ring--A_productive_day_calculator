@@ -122,7 +122,7 @@ somewhere else that does.
 2. **Push this project to GitHub.**
 3. **Create a Render web service** from that GitHub repo. Set:
    - Build command: `pip install -r requirements.txt`
-   - Start command: `gunicorn app:app`
+   - Start command: `gunicorn app:app --timeout 120`
 4. **Set three environment variables in Render's dashboard** (never commit
    these to git):
    - `SECRET_KEY` — any long random string
@@ -137,6 +137,14 @@ Note: this was tested locally against the same compatibility layer that
 talks to Turso (via libSQL's local file mode), but not against a live Turso
 account, since that requires real credentials. The first deploy is the real
 test — if something doesn't work, share the exact error and we'll fix it.
+
+**Performance note:** pages that scan many days (History, Insights) fetch
+all the data they need in a small, fixed number of bulk queries rather than
+looping a query-per-day — that distinction barely matters against a local
+SQLite file, but against a remote database like Turso, a query-per-day loop
+over 60+ days can be slow enough to exceed a server's request timeout. If
+you're extending these pages, keep using `fetch_bulk_day_context()` +
+`get_day_data_bulk()` rather than calling `get_day_data()` in a loop.
 
 
 

@@ -6,19 +6,19 @@ import sqlite3
 import statistics
 from datetime import date, timedelta, datetime
 from functools import wraps
- 
+
 from flask import Flask, render_template, request, redirect, url_for, g, session, Response
 from werkzeug.security import generate_password_hash, check_password_hash
- 
+
 DB_PATH = "productive_day.db"
- 
+
 # --- Database backend: local SQLite file by default (unchanged local dev
 # workflow), or a free-tier Turso (libSQL) database when these two env vars
 # are set — that's how the app runs on a host with no persistent disk. ---
 TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL")
 TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 USE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
- 
+
 if USE_TURSO:
     print(f"[Day Ring] Using Turso database backend ({TURSO_DATABASE_URL[:30]}...)")
 else:
@@ -28,72 +28,72 @@ else:
         "persistent disk. Set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN "
         "to use Turso instead."
     )
- 
- 
+
+
 class DictRow:
     """Makes a Turso/libSQL result row support row['col'], row[0], dict(row),
     and .keys() — the same interface sqlite3.Row already provides — so the
     rest of this app doesn't need to know which backend is active."""
     __slots__ = ("_columns", "_values")
- 
+
     def __init__(self, columns, values):
         self._columns = columns
         self._values = values
- 
+
     def __getitem__(self, key):
         if isinstance(key, str):
             return self._values[self._columns.index(key)]
         return self._values[key]
- 
+
     def keys(self):
         return list(self._columns)
- 
+
     def __iter__(self):
         return iter(self._values)
- 
+
     def __repr__(self):
         return f"DictRow({dict(zip(self._columns, self._values))})"
- 
- 
+
+
 class TursoCursor:
     def __init__(self, raw_cursor):
         self._cursor = raw_cursor
- 
+
     def _columns(self):
         return [d[0] for d in (self._cursor.description or [])]
- 
+
     def fetchone(self):
         row = self._cursor.fetchone()
         return DictRow(self._columns(), row) if row is not None else None
- 
+
     def fetchall(self):
         cols = self._columns()
         return [DictRow(cols, r) for r in self._cursor.fetchall()]
- 
+
     @property
     def lastrowid(self):
         return self._cursor.lastrowid
- 
- 
+
+
 class TursoConnection:
     """Wraps a raw libsql connection so calling code (db.execute(...), etc.)
     behaves the same as it does against a plain sqlite3.Connection."""
     def __init__(self, raw_conn):
         self._conn = raw_conn
- 
+
     def execute(self, sql, params=()):
         return TursoCursor(self._conn.execute(sql, params))
- 
+
     def executemany(self, sql, seq_of_params):
         return TursoCursor(self._conn.executemany(sql, seq_of_params))
- 
+
     def commit(self):
         self._conn.commit()
- 
+
     def close(self):
         self._conn.close()
- 
- 
+
+
 def open_db_connection():
     if USE_TURSO:
         import libsql
@@ -101,8 +101,8 @@ def open_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
- 
- 
+
+
 app = Flask(__name__)
 # For local use this default is fine. Before hosting this online, set a real
 # SECRET_KEY environment variable so sessions can't be forged.
@@ -111,8 +111,8 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-this-before-hosti
 # permanent at login/register so users don't have to keep re-entering
 # username and password.
 app.permanent_session_lifetime = timedelta(days=30)
- 
- 
+
+
 @app.context_processor
 def inject_globals():
     endpoint_map = {
@@ -123,8 +123,8 @@ def inject_globals():
         "today_iso": date.today().isoformat(),
         "active_page": endpoint_map.get(request.endpoint, "today"),
     }
- 
- 
+
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -132,13 +132,17 @@ def login_required(view):
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
- 
- 
+
+
 def current_user_id():
     return session["user_id"]
- 
- 
+
+
 # --- Default habit set: category, name, weight (weights sum to 100) ---
+# Sentinel distinguishing "caller didn't pass reflection_row" from "caller
+# passed reflection_row=None" (meaning: looked it up, there isn't one).
+_UNSET = object()
+
 DEFAULT_HABITS = [
     ("Mind", "Focused study block (2+ hrs)", 15),
     ("Mind", "Completed today's key task", 10),
@@ -152,7 +156,7 @@ DEFAULT_HABITS = [
     ("Social", "Meaningful social/family time", 5),
     ("Social", "Journaled / reflected", 5),
 ]
- 
+
 CATEGORY_COLORS = {
     "Mind": "#5B7FBD",
     "Body": "#6E9B6E",
@@ -161,13 +165,13 @@ CATEGORY_COLORS = {
     "Discipline": "#3F9C9C",
     "Social": "#C97B84",
 }
- 
+
 # Used for any category the user adds beyond the default six
 EXTRA_PALETTE = ["#B0724A", "#5C7A99", "#7A9E7E", "#A6689A", "#B08C3A", "#6A7FA6"]
- 
+
 # How many distinct logged days before the ML features have enough to work with
 BASELINE_TARGET_DAYS = 15
- 
+
 TAG_KEYWORDS = {
     "Fatigue": ["tired", "exhausted", "sleepy", "fatigue", "no energy", "drained", "burnt out"],
     "Distraction": ["distracted", "phone", "social media", "scrolling", "instagram", "youtube", "reels"],
@@ -179,14 +183,14 @@ TAG_KEYWORDS = {
     "Focus": ["focused", "productive", "flow", "concentrated", "on track"],
     "Motivation": ["motivated", "unmotivated", "demotivated", "inspired", "energized"],
 }
- 
+
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     _sentiment_analyzer = SentimentIntensityAnalyzer()
 except ImportError:
     _sentiment_analyzer = None
- 
- 
+
+
 def analyze_reflection(text):
     """Returns (sentiment_compound_score_or_None, comma_joined_tags)."""
     text = (text or "").strip()
@@ -196,8 +200,8 @@ def analyze_reflection(text):
     lower = text.lower()
     tags = [tag for tag, keywords in TAG_KEYWORDS.items() if any(kw in lower for kw in keywords)]
     return sentiment, ",".join(tags)
- 
- 
+
+
 def sentiment_label(score):
     if score is None:
         return None
@@ -206,8 +210,8 @@ def sentiment_label(score):
     if score <= -0.3:
         return "negative"
     return "neutral"
- 
- 
+
+
 def encouragement_for(pct, is_today):
     if not is_today:
         return None
@@ -220,29 +224,29 @@ def encouragement_for(pct, is_today):
     if pct < 100:
         return "Strong day. A few more and it's a clean sweep."
     return "Full ring. That's exactly the kind of day the model will learn from."
- 
- 
+
+
 def color_for_category(cat, known_categories):
     if cat in CATEGORY_COLORS:
         return CATEGORY_COLORS[cat]
     others = [c for c in known_categories if c != cat and c not in CATEGORY_COLORS]
     idx = others.index(cat) if cat in others else 0
     return EXTRA_PALETTE[idx % len(EXTRA_PALETTE)]
- 
- 
+
+
 def get_db():
     if "db" not in g:
         g.db = open_db_connection()
     return g.db
- 
- 
+
+
 @app.teardown_appcontext
 def close_db(exception=None):
     db = g.pop("db", None)
     if db is not None:
         db.close()
- 
- 
+
+
 def get_or_create_legacy_user(db):
     """Used only when migrating a pre-accounts database, so existing solo
     data isn't lost. Default login: username 'me', password 'changeme123'
@@ -255,18 +259,18 @@ def get_or_create_legacy_user(db):
         "INSERT INTO users (username, password_hash) VALUES (?, ?)", ("me", pwd_hash)
     )
     return cur.lastrowid
- 
- 
+
+
 def seed_default_habits(db, user_id):
     db.executemany(
         "INSERT INTO habits (user_id, category, name, weight) VALUES (?, ?, ?, ?)",
         [(user_id, cat, name, weight) for cat, name, weight in DEFAULT_HABITS],
     )
- 
- 
+
+
 def init_db():
     db = open_db_connection()
- 
+
     db.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,7 +322,7 @@ def init_db():
             PRIMARY KEY (user_id, log_date)
         )
     """)
- 
+
     # --- Migrate a pre-accounts database (single shared user) in place ---
     habit_cols = [r[1] for r in db.execute("PRAGMA table_info(habits)").fetchall()]
     if "user_id" not in habit_cols:
@@ -327,7 +331,7 @@ def init_db():
         db.execute("UPDATE habits SET user_id = ? WHERE user_id IS NULL", (legacy_id,))
         db.execute("ALTER TABLE logs ADD COLUMN user_id INTEGER")
         db.execute("UPDATE logs SET user_id = ? WHERE user_id IS NULL", (legacy_id,))
- 
+
     reflection_cols = [r[1] for r in db.execute("PRAGMA table_info(reflections)").fetchall()]
     if "user_id" not in reflection_cols:
         legacy_id = get_or_create_legacy_user(db)
@@ -355,24 +359,26 @@ def init_db():
                 db.execute(f"ALTER TABLE reflections ADD COLUMN {col} {coltype}")
             except Exception:
                 pass  # column already exists
- 
+
     db.commit()
     db.close()
- 
- 
+
+
 def get_active_habits(db, user_id):
     return db.execute(
         "SELECT * FROM habits WHERE user_id = ? AND active = 1 ORDER BY category, id", (user_id,)
     ).fetchall()
- 
- 
-def get_day_data(db, user_id, log_date):
-    habits = get_active_habits(db, user_id)
-    completed_rows = db.execute(
-        "SELECT habit_id, completed FROM logs WHERE user_id = ? AND log_date = ?", (user_id, log_date)
-    ).fetchall()
-    completed_map = {r["habit_id"]: bool(r["completed"]) for r in completed_rows}
- 
+
+
+def get_day_data(db, user_id, log_date, habits=None, completed_map=None, reflection_row=_UNSET):
+    if habits is None:
+        habits = get_active_habits(db, user_id)
+    if completed_map is None:
+        completed_rows = db.execute(
+            "SELECT habit_id, completed FROM logs WHERE user_id = ? AND log_date = ?", (user_id, log_date)
+        ).fetchall()
+        completed_map = {r["habit_id"]: bool(r["completed"]) for r in completed_rows}
+
     by_category = {}
     total_weight = 0
     earned_weight = 0
@@ -388,9 +394,9 @@ def get_day_data(db, user_id, log_date):
         by_category[h["category"]]["habits"].append({
             "id": h["id"], "name": h["name"], "weight": h["weight"], "done": done
         })
- 
+
     overall_pct = round((earned_weight / total_weight) * 100) if total_weight else 0
- 
+
     RADII = [90, 78, 66, 54, 42, 30]
     cat_names = list(by_category.keys())
     category_rings = []
@@ -406,17 +412,18 @@ def get_day_data(db, user_id, log_date):
             "circumference": circumference,
             "offset": round(circumference * (1 - pct / 100), 2),
         })
- 
-    reflection_row = db.execute(
-        "SELECT text, sentiment, tags FROM reflections WHERE user_id = ? AND log_date = ?",
-        (user_id, log_date),
-    ).fetchone()
+
+    if reflection_row is _UNSET:
+        reflection_row = db.execute(
+            "SELECT text, sentiment, tags FROM reflections WHERE user_id = ? AND log_date = ?",
+            (user_id, log_date),
+        ).fetchone()
     reflection_text = reflection_row["text"] if reflection_row else ""
     reflection_sentiment = reflection_row["sentiment"] if reflection_row else None
     reflection_tags = (
         [t for t in reflection_row["tags"].split(",") if t] if reflection_row and reflection_row["tags"] else []
     )
- 
+
     return {
         "overall_pct": overall_pct,
         "by_category": by_category,
@@ -428,12 +435,67 @@ def get_day_data(db, user_id, log_date):
         "earned_weight": earned_weight,
         "total_weight": total_weight,
     }
- 
- 
+
+
+def fetch_bulk_day_context(db, user_id, dates):
+    """One trip to the database for habits, logs, and reflections covering
+    every date in `dates`, instead of separate queries per day. Critical
+    against a remote database (Turso) where each query is a real network
+    round trip — looping get_day_data() per day was slow enough to make
+    gunicorn kill the worker on pages that scan many days (History,
+    Insights)."""
+    dates = list(dates)
+    if not dates:
+        return [], {}, {}
+
+    habits = get_active_habits(db, user_id)
+    placeholders = ",".join("?" for _ in dates)
+
+    log_rows = db.execute(
+        f"SELECT log_date, habit_id, completed FROM logs WHERE user_id = ? AND log_date IN ({placeholders})",
+        (user_id, *dates),
+    ).fetchall()
+    logs_by_date = {}
+    for r in log_rows:
+        logs_by_date.setdefault(r["log_date"], {})[r["habit_id"]] = bool(r["completed"])
+
+    reflection_rows = db.execute(
+        f"SELECT log_date, text, sentiment, tags FROM reflections WHERE user_id = ? AND log_date IN ({placeholders})",
+        (user_id, *dates),
+    ).fetchall()
+    reflections_by_date = {r["log_date"]: r for r in reflection_rows}
+
+    return habits, logs_by_date, reflections_by_date
+
+
+def get_day_data_bulk(user_id, log_date, habits, logs_by_date, reflections_by_date):
+    """Same output as get_day_data(), computed entirely from data already
+    fetched by fetch_bulk_day_context() — zero additional DB queries."""
+    return get_day_data(
+        None, user_id, log_date,
+        habits=habits,
+        completed_map=logs_by_date.get(log_date, {}),
+        reflection_row=reflections_by_date.get(log_date),
+    )
+
+
 def compute_streak(db, user_id, threshold=50):
     """Consecutive days up to and including today with overall score >= threshold."""
+    window_days = 120  # covers any realistic streak in one bulk fetch
+    today = date.today()
+    window_dates = [(today - timedelta(days=i)).isoformat() for i in range(window_days)]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, window_dates)
+
     streak = 0
-    d = date.today()
+    for d_iso in window_dates:
+        data = get_day_data_bulk(user_id, d_iso, habits, logs_by_date, reflections_by_date)
+        if data["overall_pct"] >= threshold:
+            streak += 1
+        else:
+            return streak
+
+    # Streak runs past the bulk-fetched window (uncommon) — keep going day by day.
+    d = today - timedelta(days=window_days)
     while True:
         data = get_day_data(db, user_id, d.isoformat())
         if data["overall_pct"] >= threshold:
@@ -444,21 +506,21 @@ def compute_streak(db, user_id, threshold=50):
         if streak > 3650:  # safety valve
             break
     return streak
- 
- 
+
+
 def total_logged_days(db, user_id):
     row = db.execute(
         "SELECT COUNT(DISTINCT log_date) AS n FROM logs WHERE user_id = ?", (user_id,)
     ).fetchone()
     return row["n"] if row else 0
- 
- 
+
+
 # --- Auth routes ---
- 
+
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
- 
- 
+
+
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "GET":
@@ -486,8 +548,8 @@ def register():
     session["username"] = username
     session.permanent = True
     return redirect(url_for("index"))
- 
- 
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -499,13 +561,13 @@ def login():
         "SELECT id, username, password_hash, failed_attempts, locked_until FROM users WHERE username = ?",
         (username,),
     ).fetchone()
- 
+
     if row and row["locked_until"]:
         locked_until = datetime.fromisoformat(row["locked_until"])
         if datetime.utcnow() < locked_until:
             minutes_left = max(1, round((locked_until - datetime.utcnow()).total_seconds() / 60))
             return render_template("login.html", error=f"Too many failed attempts. Try again in about {minutes_left} minute{'s' if minutes_left != 1 else ''}.")
- 
+
     if not row or not check_password_hash(row["password_hash"], password):
         if row:
             attempts = row["failed_attempts"] + 1
@@ -521,7 +583,7 @@ def login():
             if locked_until:
                 return render_template("login.html", error=f"Too many failed attempts. Locked for {LOCKOUT_MINUTES} minutes.")
         return render_template("login.html", error="Incorrect username or password.")
- 
+
     db.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?", (row["id"],))
     db.commit()
     session["user_id"] = row["id"]
@@ -529,29 +591,29 @@ def login():
     session.permanent = True
     next_path = request.args.get("next")
     return redirect(next_path or url_for("index"))
- 
- 
+
+
 @app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect(url_for("login"))
- 
- 
+
+
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     db = get_db()
     step = request.form.get("step", "username")
- 
+
     if request.method == "GET":
         return render_template("forgot_password.html", step="username", username=None, error=None)
- 
+
     if step == "username":
         username = request.form.get("username", "").strip()
         row = db.execute("SELECT security_question FROM users WHERE username = ?", (username,)).fetchone()
         if not row:
             return render_template("forgot_password.html", step="username", username=None, error="No account with that username.")
         return render_template("forgot_password.html", step="answer", username=username, question=row["security_question"], error=None)
- 
+
     if step == "answer":
         username = request.form.get("username", "").strip()
         answer = request.form.get("security_answer", "").strip().lower()
@@ -569,10 +631,10 @@ def forgot_password():
         )
         db.commit()
         return render_template("login.html", error=None, reset_success=True)
- 
+
     return redirect(url_for("forgot_password"))
- 
- 
+
+
 @app.route("/account", methods=["GET", "POST"])
 @login_required
 def account():
@@ -590,16 +652,16 @@ def account():
     db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (generate_password_hash(new_password), user_id))
     db.commit()
     return render_template("account.html", error=None, success="Password updated.")
- 
- 
+
+
 # --- Day view / toggling / reflection ---
- 
+
 @app.route("/")
 @login_required
 def index():
     return redirect(url_for("day_view", log_date=date.today().isoformat()))
- 
- 
+
+
 @app.route("/day/<log_date>")
 @login_required
 def day_view(log_date):
@@ -613,7 +675,7 @@ def day_view(log_date):
     streak = compute_streak(db, user_id)
     is_today = (current == date.today())
     logged_days = total_logged_days(db, user_id)
- 
+
     predicted_tone = None
     anomaly = None
     if is_today:
@@ -621,7 +683,7 @@ def day_view(log_date):
         cat_pcts = {r["name"]: r["pct"] for r in day_data["category_rings"]}
         predicted_tone = predict_today_tone(model, cat_pcts)
         anomaly = compute_anomaly(db, user_id, day_data["overall_pct"])
- 
+
     return render_template(
         "index.html",
         today=log_date,
@@ -638,8 +700,8 @@ def day_view(log_date):
         anomaly=anomaly,
         **day_data,
     )
- 
- 
+
+
 @app.route("/toggle", methods=["POST"])
 @login_required
 def toggle():
@@ -648,13 +710,13 @@ def toggle():
     log_date = request.form["log_date"]
     habit_id = int(request.form["habit_id"])
     completed = request.form.get("completed") == "1"
- 
+
     owns_habit = db.execute(
         "SELECT id FROM habits WHERE id = ? AND user_id = ?", (habit_id, user_id)
     ).fetchone()
     if not owns_habit:
         return redirect(url_for("day_view", log_date=log_date))
- 
+
     db.execute(
         """
         INSERT INTO logs (user_id, log_date, habit_id, completed) VALUES (?, ?, ?, ?)
@@ -664,8 +726,8 @@ def toggle():
     )
     db.commit()
     return redirect(url_for("day_view", log_date=log_date))
- 
- 
+
+
 @app.route("/reflect", methods=["POST"])
 @login_required
 def reflect():
@@ -683,10 +745,10 @@ def reflect():
     )
     db.commit()
     return redirect(url_for("day_view", log_date=log_date))
- 
- 
+
+
 # --- Habit management ---
- 
+
 @app.route("/habits")
 @login_required
 def habits():
@@ -700,8 +762,8 @@ def habits():
     return render_template(
         "habits.html", habits=all_habits, active_total=active_total, categories=categories
     )
- 
- 
+
+
 @app.route("/habits/add", methods=["POST"])
 @login_required
 def add_habit():
@@ -717,8 +779,8 @@ def add_habit():
         )
         db.commit()
     return redirect(url_for("habits"))
- 
- 
+
+
 @app.route("/habits/<int:habit_id>/update", methods=["POST"])
 @login_required
 def update_habit(habit_id):
@@ -736,8 +798,8 @@ def update_habit(habit_id):
     )
     db.commit()
     return redirect(url_for("habits"))
- 
- 
+
+
 @app.route("/habits/<int:habit_id>/toggle-active", methods=["POST"])
 @login_required
 def toggle_habit_active(habit_id):
@@ -753,8 +815,8 @@ def toggle_habit_active(habit_id):
         )
         db.commit()
     return redirect(url_for("habits"))
- 
- 
+
+
 @app.route("/habits/<int:habit_id>/delete", methods=["POST"])
 @login_required
 def delete_habit(habit_id):
@@ -767,10 +829,10 @@ def delete_habit(habit_id):
     db.execute("DELETE FROM habits WHERE id = ? AND user_id = ?", (habit_id, user_id))
     db.commit()
     return redirect(url_for("habits"))
- 
- 
+
+
 # --- Insights ---
- 
+
 def compute_insights(db, user_id):
     """Correlate each category's daily completion % with the overall daily score.
     Needs several distinct logged days to say anything meaningful."""
@@ -779,12 +841,13 @@ def compute_insights(db, user_id):
             "SELECT DISTINCT log_date FROM logs WHERE user_id = ? ORDER BY log_date", (user_id,)
         ).fetchall()
     ]
-    daily = [get_day_data(db, user_id, d) for d in log_dates]
- 
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, log_dates)
+    daily = [get_day_data_bulk(user_id, d, habits, logs_by_date, reflections_by_date) for d in log_dates]
+
     all_categories = sorted({
         cat for d in daily for cat in d["by_category"].keys()
     })
- 
+
     series_overall = [d["overall_pct"] for d in daily]
     category_series = {}
     for cat in all_categories:
@@ -794,7 +857,7 @@ def compute_insights(db, user_id):
             pct = round((cat_data["earned"] / cat_data["total"]) * 100) if cat_data and cat_data["total"] else None
             series.append(pct)
         category_series[cat] = series
- 
+
     def pearson(xs, ys):
         pairs = [(x, y) for x, y in zip(xs, ys) if x is not None]
         n = len(pairs)
@@ -808,22 +871,22 @@ def compute_insights(db, user_id):
         if var_x == 0 or var_y == 0:
             return None
         return cov / (var_x ** 0.5 * var_y ** 0.5)
- 
+
     correlations = []
     for cat, series in category_series.items():
         r = pearson(series, series_overall)
         avg = round(sum(v for v in series if v is not None) / max(1, len([v for v in series if v is not None])))
         correlations.append({"category": cat, "r": round(r, 2) if r is not None else None, "avg": avg})
- 
+
     correlations.sort(key=lambda c: (c["r"] is None, -(c["r"] or 0)))
- 
+
     return {
         "logged_days": len(log_dates),
         "correlations": correlations,
         "enough_data": len(log_dates) >= 5,
     }
- 
- 
+
+
 def compute_reflection_insights(db, user_id):
     rows = db.execute(
         "SELECT log_date, sentiment, tags FROM reflections WHERE user_id = ? AND text IS NOT NULL AND text != ''",
@@ -831,14 +894,19 @@ def compute_reflection_insights(db, user_id):
     ).fetchall()
     if not rows:
         return {"reflection_count": 0, "tag_insights": [], "avg_sentiment": None}
- 
-    date_pct = {r["log_date"]: get_day_data(db, user_id, r["log_date"])["overall_pct"] for r in rows}
+
+    reflection_dates = [r["log_date"] for r in rows]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, reflection_dates)
+    date_pct = {
+        d: get_day_data_bulk(user_id, d, habits, logs_by_date, reflections_by_date)["overall_pct"]
+        for d in reflection_dates
+    }
     tag_to_dates = {}
     for r in rows:
         for t in (r["tags"] or "").split(","):
             if t:
                 tag_to_dates.setdefault(t, set()).add(r["log_date"])
- 
+
     all_dates = set(date_pct.keys())
     tag_insights = []
     for tag, dates in tag_to_dates.items():
@@ -857,17 +925,17 @@ def compute_reflection_insights(db, user_id):
             "diff": (avg_with - avg_without) if avg_without is not None else None,
         })
     tag_insights.sort(key=lambda t: (t["diff"] is None, -(abs(t["diff"]) if t["diff"] is not None else 0)))
- 
+
     sentiments = [r["sentiment"] for r in rows if r["sentiment"] is not None]
     avg_sentiment = round(sum(sentiments) / len(sentiments), 2) if sentiments else None
- 
+
     return {
         "reflection_count": len(rows),
         "tag_insights": tag_insights,
         "avg_sentiment": avg_sentiment,
     }
- 
- 
+
+
 def compute_suggested_weights(db, user_id):
     """Propose new habit weights: categories that move with the overall
     score more get more weight, ones that don't get less. Directional
@@ -876,22 +944,22 @@ def compute_suggested_weights(db, user_id):
     insights_data = compute_insights(db, user_id)
     if not insights_data["enough_data"]:
         return None
- 
+
     rs = {c["category"]: (c["r"] if c["r"] is not None else 0) for c in insights_data["correlations"]}
     if not rs:
         return None
- 
+
     adjusted = {cat: max(r, 0) + 0.05 for cat, r in rs.items()}
     total_adjusted = sum(adjusted.values())
     shares = {cat: adjusted[cat] / total_adjusted for cat in adjusted}
- 
+
     active_habits = get_active_habits(db, user_id)
     by_cat = {}
     for h in active_habits:
         by_cat.setdefault(h["category"], []).append(h)
     if not by_cat:
         return None
- 
+
     suggestions = []
     for cat, habits_list in by_cat.items():
         current_total = sum(h["weight"] for h in habits_list)
@@ -904,13 +972,13 @@ def compute_suggested_weights(db, user_id):
                     "id": h["id"], "name": h["name"], "category": cat,
                     "old_weight": h["weight"], "new_weight": new_weight,
                 })
- 
+
     return {"suggestions": suggestions, "has_changes": len(suggestions) > 0}
- 
- 
+
+
 MIN_PREDICTIVE_ROWS = 7
- 
- 
+
+
 def compute_predictive_model(db, user_id):
     """Learns, per user, which categories actually predict how positive their
     daily reflection reads — using reflection sentiment as the target rather
@@ -923,16 +991,19 @@ def compute_predictive_model(db, user_id):
     ).fetchall()
     if len(rows) < MIN_PREDICTIVE_ROWS:
         return {"ready": False, "rows": len(rows), "needed": MIN_PREDICTIVE_ROWS}
- 
+
     categories = sorted({h["category"] for h in get_active_habits(db, user_id)})
     if not categories:
         return {"ready": False, "rows": len(rows), "needed": MIN_PREDICTIVE_ROWS}
- 
+
     import numpy as np
- 
+
+    reflection_dates = [r["log_date"] for r in rows]
+    bulk_habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, reflection_dates)
+
     X, y = [], []
     for r in rows:
-        day = get_day_data(db, user_id, r["log_date"])
+        day = get_day_data_bulk(user_id, r["log_date"], bulk_habits, logs_by_date, reflections_by_date)
         feat = []
         for cat in categories:
             cd = day["by_category"].get(cat)
@@ -940,20 +1011,20 @@ def compute_predictive_model(db, user_id):
             feat.append(pct)
         X.append(feat)
         y.append(r["sentiment"])
- 
+
     X_arr = np.array(X)
     X_with_intercept = np.hstack([np.ones((X_arr.shape[0], 1)), X_arr])
     y_arr = np.array(y)
     coeffs, *_ = np.linalg.lstsq(X_with_intercept, y_arr, rcond=None)
     intercept = float(coeffs[0])
     weights = {cat: round(float(w), 2) for cat, w in zip(categories, coeffs[1:])}
- 
+
     return {
         "ready": True, "rows": len(rows), "needed": MIN_PREDICTIVE_ROWS,
         "intercept": round(intercept, 2), "weights": weights, "categories": categories,
     }
- 
- 
+
+
 def predict_today_tone(model, today_category_pcts):
     if not model or not model.get("ready"):
         return None
@@ -961,12 +1032,12 @@ def predict_today_tone(model, today_category_pcts):
     for cat, w in model["weights"].items():
         score += w * (today_category_pcts.get(cat, 0) / 100.0)
     return round(max(-1.0, min(1.0, score)), 2)
- 
- 
+
+
 MIN_ANOMALY_DAYS = 7
 ANOMALY_Z_THRESHOLD = 1.25
- 
- 
+
+
 def compute_anomaly(db, user_id, today_pct):
     """Flags when today looks statistically unusual next to the user's own
     history — gentle, descriptive framing only, never alarmist."""
@@ -976,7 +1047,12 @@ def compute_anomaly(db, user_id, today_pct):
     ).fetchall()
     if len(log_dates) < MIN_ANOMALY_DAYS:
         return None
-    history_pcts = [get_day_data(db, user_id, r["log_date"])["overall_pct"] for r in log_dates]
+    hist_dates = [r["log_date"] for r in log_dates]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, hist_dates)
+    history_pcts = [
+        get_day_data_bulk(user_id, d, habits, logs_by_date, reflections_by_date)["overall_pct"]
+        for d in hist_dates
+    ]
     mean = statistics.mean(history_pcts)
     stdev = statistics.pstdev(history_pcts)
     if stdev == 0:
@@ -993,8 +1069,8 @@ def compute_anomaly(db, user_id, today_pct):
             "message": f"Well above your usual pattern (you typically land around {round(mean)}%). Nice day.",
         }
     return None
- 
- 
+
+
 def build_trend_svg(trend_points, width=600, height=160, pad_x=16, pad_y=18):
     n = len(trend_points)
     if n < 2:
@@ -1008,8 +1084,8 @@ def build_trend_svg(trend_points, width=600, height=160, pad_x=16, pad_y=18):
         for x, y, p in zip(xs, ys, trend_points)
     ]
     return {"line_d": line_d, "area_d": area_d, "points": points, "width": width, "height": height}
- 
- 
+
+
 def compute_trend(db, user_id, days=30):
     today = date.today()
     start = today - timedelta(days=days - 1)
@@ -1017,56 +1093,60 @@ def compute_trend(db, user_id, days=30):
         "SELECT DISTINCT log_date FROM logs WHERE user_id = ? AND log_date >= ? ORDER BY log_date",
         (user_id, start.isoformat()),
     ).fetchall()
+    trend_dates = [r["log_date"] for r in log_dates]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, trend_dates)
     trend_points = [
-        {"date": r["log_date"], "pct": get_day_data(db, user_id, r["log_date"])["overall_pct"]}
-        for r in log_dates
+        {"date": d, "pct": get_day_data_bulk(user_id, d, habits, logs_by_date, reflections_by_date)["overall_pct"]}
+        for d in trend_dates
     ]
     return {"trend_points": trend_points, "trend_svg": build_trend_svg(trend_points)}
- 
- 
+
+
 def compute_weekly_summary(db, user_id):
     today = date.today()
     this_week_start = today - timedelta(days=6)
     last_week_start = today - timedelta(days=13)
     last_week_end = today - timedelta(days=7)
- 
+
+    all_two_week_dates = [
+        r["log_date"] for r in db.execute(
+            "SELECT DISTINCT log_date FROM logs WHERE user_id = ? AND log_date >= ? AND log_date <= ?",
+            (user_id, last_week_start.isoformat(), today.isoformat()),
+        ).fetchall()
+    ]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, all_two_week_dates)
+    day_data_by_date = {
+        d: get_day_data_bulk(user_id, d, habits, logs_by_date, reflections_by_date)
+        for d in all_two_week_dates
+    }
+
     def avg_pct_for_range(start, end):
-        dates = [
-            r["log_date"] for r in db.execute(
-                "SELECT DISTINCT log_date FROM logs WHERE user_id = ? AND log_date >= ? AND log_date <= ?",
-                (user_id, start.isoformat(), end.isoformat()),
-            ).fetchall()
-        ]
+        dates = [d for d in all_two_week_dates if start.isoformat() <= d <= end.isoformat()]
         if not dates:
             return None, 0
-        pcts = [get_day_data(db, user_id, d)["overall_pct"] for d in dates]
+        pcts = [day_data_by_date[d]["overall_pct"] for d in dates]
         return round(sum(pcts) / len(pcts)), len(dates)
- 
+
     def category_averages(start, end):
-        dates = [
-            r["log_date"] for r in db.execute(
-                "SELECT DISTINCT log_date FROM logs WHERE user_id = ? AND log_date >= ? AND log_date <= ?",
-                (user_id, start.isoformat(), end.isoformat()),
-            ).fetchall()
-        ]
+        dates = [d for d in all_two_week_dates if start.isoformat() <= d <= end.isoformat()]
         totals = {}
         for d in dates:
-            day = get_day_data(db, user_id, d)
+            day = day_data_by_date[d]
             for cat, cd in day["by_category"].items():
                 if cd["total"]:
                     totals.setdefault(cat, []).append(round((cd["earned"] / cd["total"]) * 100))
         return {cat: round(sum(v) / len(v)) for cat, v in totals.items()}
- 
+
     this_avg, this_days = avg_pct_for_range(this_week_start, today)
     last_avg, last_days = avg_pct_for_range(last_week_start, last_week_end)
     cat_avgs = category_averages(this_week_start, today)
- 
+
     if this_days == 0:
         return {"has_data": False}
- 
+
     strongest = max(cat_avgs, key=cat_avgs.get) if cat_avgs else None
     weakest = min(cat_avgs, key=cat_avgs.get) if cat_avgs else None
- 
+
     trend = None
     if last_avg is not None:
         diff = this_avg - last_avg
@@ -1076,7 +1156,7 @@ def compute_weekly_summary(db, user_id):
             trend = "down"
         else:
             trend = "flat"
- 
+
     return {
         "has_data": True,
         "this_avg": this_avg, "this_days": this_days,
@@ -1085,8 +1165,8 @@ def compute_weekly_summary(db, user_id):
         "strongest": strongest, "strongest_pct": cat_avgs.get(strongest) if strongest else None,
         "weakest": weakest, "weakest_pct": cat_avgs.get(weakest) if weakest else None,
     }
- 
- 
+
+
 @app.route("/insights")
 @login_required
 def insights():
@@ -1099,8 +1179,8 @@ def insights():
     data["predictive_model"] = compute_predictive_model(db, user_id)
     data["weekly_summary"] = compute_weekly_summary(db, user_id)
     return render_template("insights.html", **data)
- 
- 
+
+
 @app.route("/insights/apply-weights", methods=["POST"])
 @login_required
 def apply_weights():
@@ -1115,8 +1195,8 @@ def apply_weights():
             )
         db.commit()
     return redirect(url_for("insights"))
- 
- 
+
+
 @app.route("/history")
 @login_required
 def history():
@@ -1126,25 +1206,26 @@ def history():
     days_count = weeks * 7
     today = date.today()
     start = today - timedelta(days=days_count - 1)
- 
+
     logged_dates = {
         r["log_date"] for r in db.execute(
             "SELECT DISTINCT log_date FROM logs WHERE user_id = ? AND log_date >= ?",
             (user_id, start.isoformat()),
         ).fetchall()
     }
- 
+    all_dates = [(start + timedelta(days=i)).isoformat() for i in range(days_count)]
+    habits, logs_by_date, reflections_by_date = fetch_bulk_day_context(db, user_id, all_dates)
+
     pad = start.weekday()  # Monday = 0, so the grid's first column starts aligned
     cells = [None] * pad
-    for i in range(days_count):
-        d = start + timedelta(days=i)
-        d_iso = d.isoformat()
+    for d_iso in all_dates:
+        d = date.fromisoformat(d_iso)
         if d_iso in logged_dates:
-            pct = get_day_data(db, user_id, d_iso)["overall_pct"]
+            pct = get_day_data_bulk(user_id, d_iso, habits, logs_by_date, reflections_by_date)["overall_pct"]
         else:
             pct = None
         cells.append({"date": d_iso, "pct": pct, "is_today": d == today})
- 
+
     logged_days = total_logged_days(db, user_id)
     return render_template(
         "history.html",
@@ -1152,8 +1233,8 @@ def history():
         logged_days=logged_days,
         baseline_target=BASELINE_TARGET_DAYS,
     )
- 
- 
+
+
 @app.route("/export/json")
 @login_required
 def export_json():
@@ -1176,8 +1257,8 @@ def export_json():
         mimetype="application/json",
         headers={"Content-Disposition": "attachment; filename=dayring_export.json"},
     )
- 
- 
+
+
 @app.route("/export/csv")
 @login_required
 def export_csv():
@@ -1186,7 +1267,7 @@ def export_csv():
     log_dates = [r["log_date"] for r in db.execute(
         "SELECT DISTINCT log_date FROM logs WHERE user_id = ? ORDER BY log_date", (user_id,)
     ).fetchall()]
- 
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["date", "overall_pct", "reflection_text", "reflection_sentiment", "reflection_tags"])
@@ -1202,17 +1283,17 @@ def export_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=dayring_export.csv"},
     )
- 
- 
+
+
 @app.route("/service-worker.js")
 def service_worker():
     return app.send_static_file("service-worker.js")
- 
- 
+
+
 # Runs on import — so tables get created/migrated whether this is started
 # with `python app.py` locally or by a production server like gunicorn,
 # which imports this module and never executes the block below.
 init_db()
- 
+
 if __name__ == "__main__":
     app.run(debug=True, port=5050)
