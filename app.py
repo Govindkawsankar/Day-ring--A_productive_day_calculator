@@ -1,3 +1,4 @@
+import base64
 import csv
 import io
 import json
@@ -7,20 +8,25 @@ import statistics
 from datetime import date, timedelta, datetime
 from functools import wraps
 
+import requests
 from flask import Flask, render_template, request, redirect, url_for, g, session, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 
 DB_PATH = "productive_day.db"
 
 # --- Database backend: local SQLite file by default (unchanged local dev
-# workflow), or a free-tier Turso (libSQL) database when these two env vars
-# are set — that's how the app runs on a host with no persistent disk. ---
+# workflow), or a free-tier Turso database when these two env vars are set —
+# that's how the app runs on a host with no persistent disk. Talks to Turso
+# over its plain HTTP API (not the native libsql/Rust client) — the native
+# client's background thread pool was causing worker crashes under
+# gunicorn's sync worker model; plain HTTP requests have no native threads
+# to manage, sidestepping that class of problem entirely. ---
 TURSO_DATABASE_URL = os.environ.get("TURSO_DATABASE_URL")
 TURSO_AUTH_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 USE_TURSO = bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
 
 if USE_TURSO:
-    print(f"[Day Ring] Using Turso database backend ({TURSO_DATABASE_URL[:30]}...)")
+    print(f"[Day Ring] Using Turso database backend over HTTP ({TURSO_DATABASE_URL[:30]}...)")
 else:
     print(
         "[Day Ring] WARNING: Using local SQLite file backend — "
@@ -31,9 +37,9 @@ else:
 
 
 class DictRow:
-    """Makes a Turso/libSQL result row support row['col'], row[0], dict(row),
-    and .keys() — the same interface sqlite3.Row already provides — so the
-    rest of this app doesn't need to know which backend is active."""
+    """Makes a Turso result row support row['col'], row[0], dict(row), and
+    .keys() — the same interface sqlite3.Row already provides — so the rest
+    of this app doesn't need to know which backend is active."""
     __slots__ = ("_columns", "_values")
 
     def __init__(self, columns, values):
@@ -55,49 +61,101 @@ class DictRow:
         return f"DictRow({dict(zip(self._columns, self._values))})"
 
 
-class TursoCursor:
-    def __init__(self, raw_cursor):
-        self._cursor = raw_cursor
-
-    def _columns(self):
-        return [d[0] for d in (self._cursor.description or [])]
+class TursoHttpCursor:
+    def __init__(self, rows, lastrowid):
+        self._rows = rows
+        self._idx = 0
+        self.lastrowid = lastrowid
 
     def fetchone(self):
-        row = self._cursor.fetchone()
-        return DictRow(self._columns(), row) if row is not None else None
+        if self._idx >= len(self._rows):
+            return None
+        row = self._rows[self._idx]
+        self._idx += 1
+        return row
 
     def fetchall(self):
-        cols = self._columns()
-        return [DictRow(cols, r) for r in self._cursor.fetchall()]
-
-    @property
-    def lastrowid(self):
-        return self._cursor.lastrowid
+        rows = self._rows[self._idx:]
+        self._idx = len(self._rows)
+        return rows
 
 
-class TursoConnection:
-    """Wraps a raw libsql connection so calling code (db.execute(...), etc.)
-    behaves the same as it does against a plain sqlite3.Connection."""
-    def __init__(self, raw_conn):
-        self._conn = raw_conn
+class TursoHttpConnection:
+    """Talks to Turso's SQL-over-HTTP API (POST /v2/pipeline) directly, via
+    plain `requests` calls — no native Rust client, no background threads.
+    One execute()+close() round trip per statement is enough for this app,
+    since nothing here relies on multi-statement transactions."""
+
+    def __init__(self, database_url, auth_token):
+        http_url = database_url.replace("libsql://", "https://", 1)
+        self._base_url = http_url.rstrip("/")
+        self._session = requests.Session()
+        self._session.headers.update({
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+        })
+
+    @staticmethod
+    def _to_arg(value):
+        if value is None:
+            return {"type": "null"}
+        if isinstance(value, bool):
+            return {"type": "integer", "value": str(int(value))}
+        if isinstance(value, int):
+            return {"type": "integer", "value": str(value)}
+        if isinstance(value, float):
+            return {"type": "float", "value": str(value)}
+        if isinstance(value, bytes):
+            return {"type": "blob", "base64": base64.b64encode(value).decode("ascii")}
+        return {"type": "text", "value": str(value)}
+
+    @staticmethod
+    def _from_cell(cell):
+        cell_type = cell.get("type")
+        if cell_type == "null":
+            return None
+        if cell_type == "integer":
+            return int(cell["value"])
+        if cell_type == "float":
+            return float(cell["value"])
+        if cell_type == "blob":
+            return base64.b64decode(cell["base64"])
+        return cell.get("value")
 
     def execute(self, sql, params=()):
-        return TursoCursor(self._conn.execute(sql, params))
+        body = {
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql, "args": [self._to_arg(p) for p in params]}},
+                {"type": "close"},
+            ]
+        }
+        resp = self._session.post(f"{self._base_url}/v2/pipeline", json=body, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        result_entry = data["results"][0]
+        if result_entry["type"] != "ok":
+            raise RuntimeError(f"Turso query failed: {result_entry}")
+        result = result_entry["response"]["result"]
+        cols = [c["name"] for c in result.get("cols", [])]
+        rows = [DictRow(cols, [self._from_cell(cell) for cell in r]) for r in result.get("rows", [])]
+        return TursoHttpCursor(rows, result.get("last_insert_rowid"))
 
     def executemany(self, sql, seq_of_params):
-        return TursoCursor(self._conn.executemany(sql, seq_of_params))
+        last_cursor = None
+        for params in seq_of_params:
+            last_cursor = self.execute(sql, params)
+        return last_cursor
 
     def commit(self):
-        self._conn.commit()
+        pass  # each execute() already durably applies (autocommit, no open transactions here)
 
     def close(self):
-        self._conn.close()
+        self._session.close()
 
 
 def open_db_connection():
     if USE_TURSO:
-        import libsql
-        return TursoConnection(libsql.connect(database=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN))
+        return TursoHttpConnection(TURSO_DATABASE_URL, TURSO_AUTH_TOKEN)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -234,13 +292,12 @@ def color_for_category(cat, known_categories):
     return EXTRA_PALETTE[idx % len(EXTRA_PALETTE)]
 
 
-# For Turso: one connection lives for the whole worker process, reused
-# across every request. Opening and closing a fresh libsql connection per
-# request was causing the underlying Rust/tokio runtime to become unstable
-# under gunicorn's sync worker (manifesting as "failed to join thread:
-# Resource deadlock avoided" panics and worker timeouts). Safe to share
-# because gunicorn's sync worker handles one request at a time — there's
-# no concurrent access to worry about within a single worker process.
+# For Turso: one requests.Session lives for the whole worker process,
+# reused across every request. With the plain-HTTP backend this is purely a
+# performance optimization (HTTP keep-alive avoids a new TCP/TLS handshake
+# per request) — unlike the native libsql client, a requests.Session has no
+# background threads, so there's no correctness risk either way. Safe to
+# share because gunicorn's sync worker handles one request at a time.
 _turso_connection = None
 
 

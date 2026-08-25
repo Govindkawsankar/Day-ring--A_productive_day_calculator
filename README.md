@@ -146,15 +146,16 @@ over 60+ days can be slow enough to exceed a server's request timeout. If
 you're extending these pages, keep using `fetch_bulk_day_context()` +
 `get_day_data_bulk()` rather than calling `get_day_data()` in a loop.
 
-**Connection lifecycle note:** the Turso backend uses one persistent
-connection per worker process, reused across every request, instead of
-opening and closing a fresh connection per request. The Turso Python
-client is built on a Rust/tokio async runtime, and repeatedly creating and
-tearing it down within the same process caused worker crashes under
-gunicorn (`failed to join thread: Resource deadlock avoided`). This is
-safe under gunicorn's default sync worker, which handles one request at a
-time per process — don't switch to a threaded/async worker class without
-revisiting this.
+**Connection architecture note:** the Turso backend talks to Turso over its
+plain HTTP API (`POST /v2/pipeline`), using the standard `requests` library
+— not the native `libsql` (Rust/tokio-based) client. That native client's
+background thread pool caused repeated worker crashes under gunicorn
+(`failed to join thread: Resource deadlock avoided`, `WORKER TIMEOUT`),
+even with only one connection created per worker process. Plain HTTP
+requests have no native threads to manage, which sidesteps that whole class
+of problem. One `requests.Session` is kept open per worker process purely
+as a performance optimization (HTTP keep-alive) — there's no correctness
+reason to, unlike the native client.
 
 
 
