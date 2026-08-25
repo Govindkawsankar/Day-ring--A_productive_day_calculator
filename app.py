@@ -234,7 +234,22 @@ def color_for_category(cat, known_categories):
     return EXTRA_PALETTE[idx % len(EXTRA_PALETTE)]
 
 
+# For Turso: one connection lives for the whole worker process, reused
+# across every request. Opening and closing a fresh libsql connection per
+# request was causing the underlying Rust/tokio runtime to become unstable
+# under gunicorn's sync worker (manifesting as "failed to join thread:
+# Resource deadlock avoided" panics and worker timeouts). Safe to share
+# because gunicorn's sync worker handles one request at a time — there's
+# no concurrent access to worry about within a single worker process.
+_turso_connection = None
+
+
 def get_db():
+    if USE_TURSO:
+        global _turso_connection
+        if _turso_connection is None:
+            _turso_connection = open_db_connection()
+        return _turso_connection
     if "db" not in g:
         g.db = open_db_connection()
     return g.db
@@ -242,6 +257,8 @@ def get_db():
 
 @app.teardown_appcontext
 def close_db(exception=None):
+    if USE_TURSO:
+        return  # persistent connection — stays open for the worker's lifetime
     db = g.pop("db", None)
     if db is not None:
         db.close()
@@ -269,7 +286,7 @@ def seed_default_habits(db, user_id):
 
 
 def init_db():
-    db = open_db_connection()
+    db = get_db() if USE_TURSO else open_db_connection()
 
     db.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -361,7 +378,8 @@ def init_db():
                 pass  # column already exists
 
     db.commit()
-    db.close()
+    if not USE_TURSO:
+        db.close()
 
 
 def get_active_habits(db, user_id):

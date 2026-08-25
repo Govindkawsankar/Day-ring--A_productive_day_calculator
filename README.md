@@ -146,6 +146,16 @@ over 60+ days can be slow enough to exceed a server's request timeout. If
 you're extending these pages, keep using `fetch_bulk_day_context()` +
 `get_day_data_bulk()` rather than calling `get_day_data()` in a loop.
 
+**Connection lifecycle note:** the Turso backend uses one persistent
+connection per worker process, reused across every request, instead of
+opening and closing a fresh connection per request. The Turso Python
+client is built on a Rust/tokio async runtime, and repeatedly creating and
+tearing it down within the same process caused worker crashes under
+gunicorn (`failed to join thread: Resource deadlock avoided`). This is
+safe under gunicorn's default sync worker, which handles one request at a
+time per process — don't switch to a threaded/async worker class without
+revisiting this.
+
 
 
 To put this under Git and push it to GitHub:
