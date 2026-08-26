@@ -104,7 +104,10 @@ class TursoHttpConnection:
         if isinstance(value, int):
             return {"type": "integer", "value": str(value)}
         if isinstance(value, float):
-            return {"type": "float", "value": str(value)}
+            # Unlike integers, a float doesn't risk precision loss as a
+            # native JSON number (both are 64-bit floats) — send it as one,
+            # not a string.
+            return {"type": "float", "value": value}
         if isinstance(value, bytes):
             return {"type": "blob", "base64": base64.b64encode(value).decode("ascii")}
         return {"type": "text", "value": str(value)}
@@ -130,7 +133,14 @@ class TursoHttpConnection:
             ]
         }
         resp = self._session.post(f"{self._base_url}/v2/pipeline", json=body, timeout=20)
-        resp.raise_for_status()
+        if not resp.ok:
+            # Surface Turso's actual error body instead of a generic "400
+            # Bad Request" — this is what a 400 traceback SHOULD show, so
+            # the real cause is visible in logs without more guesswork.
+            raise RuntimeError(
+                f"Turso HTTP {resp.status_code} for SQL: {sql[:200]!r} args={params!r}\n"
+                f"Response body: {resp.text[:1000]}"
+            )
         data = resp.json()
         result_entry = data["results"][0]
         if result_entry["type"] != "ok":
